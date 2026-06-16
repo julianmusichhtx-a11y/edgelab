@@ -1,22 +1,17 @@
-{
-  "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "edgelab",
-  "main": "src/index.ts",
-  "compatibility_date": "2025-03-27",
-  "observability": {
-    "enabled": true
-  },
-  "kv_namespaces": [
-    {
-      "binding": "USER_NOTIFICATION",
-      "id": "22cacf90546d48e9af8b2d82f2c69614"
-    },
-    {
-      "binding": "LINEUP_KV",
-      "id": "22cacf90546d48e9af8b2d82f2c69614"
-    }
-  ],
-  "triggers": {
-    "crons": ["0 21 * * *", "0 23 * * *", "0 0 * * *", "30 0 * * *"]
-  }
-}
+name = "edgelab"
+main = "src/index.ts"
+compatibility_date = "2025-03-27"
+
+[observability]
+enabled = true
+
+[[kv_namespaces]]
+binding = "USER_NOTIFICATION"
+id = "22cacf90546d48e9af8b2d82f2c69614"
+
+[[kv_namespaces]]
+binding = "LINEUP_KV"
+id = "22cacf90546d48e9af8b2d82f2c69614"
+
+[triggers]
+crons = ["0 21 * * *", "0 23 * * *", "0 0 * * *", "30 0 * * *"]
