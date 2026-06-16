@@ -1,6 +1,6 @@
 // ============================================================
 // UNDERDOG EDGE AI — Unified Cloudflare Worker
-// Proxy + Lineup Validation + CLV Tracking
+// Proxy + Lineup Validation + CLV Tracking + AI (DeepSeek/Gemini)
 // ============================================================
 
 const MLB_STATS_BASE = 'https://statsapi.mlb.com/api/v1';
@@ -22,7 +22,7 @@ export default {
 
     const url = new URL(request.url);
 
-    // ---- NEW: Lineup check routes ----
+    // ---- Lineup check routes ----
     if (url.pathname === '/lineup-check') {
       const result = await checkLineups(env);
       return jsonResponse(result);
@@ -36,7 +36,6 @@ export default {
     }
 
     if (url.pathname === '/lineup-bulk') {
-      // Check multiple players at once — POST with { players: ["name1", "name2"] }
       try {
         const body = await request.json();
         const players = body.players || [];
@@ -51,7 +50,6 @@ export default {
     }
 
     if (url.pathname === '/snapshot-props') {
-      // POST with { props: [{ playerId, playerName, propType, line, higherOdds, lowerOdds, source, gameDate }] }
       try {
         const body = await request.json();
         const result = await savePropsSnapshot(body.props || [], env);
@@ -65,6 +63,76 @@ export default {
       const gameDate = url.searchParams.get('date') || getTodayDateString();
       const result = await getClosingLines(gameDate, env);
       return jsonResponse(result);
+    }
+
+    // ---- AI ENDPOINT: DeepSeek primary, Gemini fallback ----
+    if (url.pathname === '/ai') {
+      try {
+        const body = await request.json();
+        const { systemPrompt, userPrompt, temperature, maxTokens, geminiKey } = body;
+
+        // Try DeepSeek first
+        try {
+          const dsResponse = await fetch('https://api.deepseek.com/chat/completions', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer sk-9edc49f6ba0942ceb34471ae3f142e0f',
+            },
+            body: JSON.stringify({
+              model: 'deepseek-v4-flash',
+              messages: [
+                { role: 'system', content: systemPrompt || '' },
+                { role: 'user', content: userPrompt || '' },
+              ],
+              temperature: temperature || 0.3,
+              max_tokens: maxTokens || 8000,
+            }),
+          });
+
+          if (dsResponse.ok) {
+            const dsData = await dsResponse.json();
+            const text = dsData.choices?.[0]?.message?.content || '';
+            return jsonResponse({ text, provider: 'deepseek', model: 'deepseek-v4-flash' });
+          }
+
+          console.log('DeepSeek failed, status:', dsResponse.status, '— falling back to Gemini');
+        } catch (dsErr) {
+          console.log('DeepSeek error:', dsErr.message, '— falling back to Gemini');
+        }
+
+        // Fallback: Gemini
+        try {
+          const gKey = geminiKey || '';
+          const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${gKey}`;
+
+          const geminiResponse = await fetch(geminiUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              system_instruction: { parts: [{ text: systemPrompt || '' }] },
+              contents: [{ parts: [{ text: userPrompt || '' }] }],
+              generationConfig: {
+                temperature: temperature || 0.3,
+                maxOutputTokens: maxTokens || 8000,
+              },
+            }),
+          });
+
+          if (geminiResponse.ok) {
+            const geminiData = await geminiResponse.json();
+            const text = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || '';
+            return jsonResponse({ text, provider: 'gemini', model: 'gemini-2.5-flash' });
+          }
+
+          console.log('Gemini also failed, status:', geminiResponse.status);
+          return jsonResponse({ error: 'Both DeepSeek and Gemini failed', text: '' }, 502);
+        } catch (gemErr) {
+          return jsonResponse({ error: 'Both AI providers failed', details: gemErr.message }, 502);
+        }
+      } catch (e) {
+        return jsonResponse({ error: 'Invalid request body' }, 400);
+      }
     }
 
     // ---- EXISTING: Proxy logic ----
@@ -135,7 +203,6 @@ async function handleScheduled(event, env) {
 async function checkLineups(env) {
   const today = getTodayDateString();
 
-  // Get today's MLB schedule with lineups and probable pitchers
   const scheduleRes = await fetch(
     `${MLB_STATS_BASE}/schedule?sportId=1&date=${today}&hydrate=probablePitcher,lineups`
   );
@@ -154,7 +221,6 @@ async function checkLineups(env) {
     const awayTeam = game.teams?.away?.team?.name || 'Unknown';
     const homeTeam = game.teams?.home?.team?.name || 'Unknown';
 
-    // Try to get confirmed lineups from boxscore
     let awayLineup = [];
     let homeLineup = [];
 
@@ -164,10 +230,9 @@ async function checkLineups(env) {
       awayLineup = extractLineup(box?.teams?.away);
       homeLineup = extractLineup(box?.teams?.home);
     } catch (e) {
-      // Boxscore not available yet — lineups not posted
+      // Boxscore not available yet
     }
 
-    // Probable pitchers (usually confirmed earlier than lineups)
     const awayPitcher = game.teams?.away?.probablePitcher;
     const homePitcher = game.teams?.home?.probablePitcher;
 
@@ -214,7 +279,6 @@ async function checkLineups(env) {
     }
   }
 
-  // Store in KV
   if (env.LINEUP_KV) {
     await env.LINEUP_KV.put(
       `lineups:${today}`,
@@ -269,7 +333,6 @@ async function getPlayerLineupStatus(playerName, env) {
 
   const nameLower = playerName.toLowerCase().trim();
 
-  // Try exact match first, then partial
   let match = data.find(p => p.playerName.toLowerCase() === nameLower);
   if (!match) {
     match = data.find(p => {
@@ -306,8 +369,6 @@ async function savePropsSnapshot(props, env) {
   const timestamp = new Date().toISOString();
   const today = getTodayDateString();
 
-  // Save each prop as a snapshot
-  // Key format: prop:{gameDate}:{playerId}:{propType}:{timestamp}
   let saved = 0;
   for (const prop of props) {
     const key = `prop:${today}:${prop.playerId || prop.playerName}:${prop.propType}:${timestamp}`;
@@ -315,11 +376,10 @@ async function savePropsSnapshot(props, env) {
       ...prop,
       timestamp,
       gameDate: today,
-    }), { expirationTtl: 172800 }); // 48 hours
+    }), { expirationTtl: 172800 });
     saved++;
   }
 
-  // Also save "latest" snapshot per player+prop for easy closing line lookup
   for (const prop of props) {
     const latestKey = `latest:${today}:${prop.playerId || prop.playerName}:${prop.propType}`;
     await env.LINEUP_KV.put(latestKey, JSON.stringify({
@@ -337,7 +397,6 @@ async function getClosingLines(gameDate, env) {
     return { error: 'KV not configured' };
   }
 
-  // List all "latest" keys for this game date
   const list = await env.LINEUP_KV.list({ prefix: `latest:${gameDate}:` });
   const closingLines = [];
 
