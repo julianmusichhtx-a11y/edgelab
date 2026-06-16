@@ -86,7 +86,7 @@ export default {
                 { role: 'user', content: userPrompt || '' },
               ],
               temperature: temperature || 0.3,
-              max_tokens: maxTokens || 8000,
+              max_tokens: maxTokens || 16000,
             }),
           });
 
@@ -114,7 +114,7 @@ export default {
               contents: [{ parts: [{ text: userPrompt || '' }] }],
               generationConfig: {
                 temperature: temperature || 0.3,
-                maxOutputTokens: maxTokens || 8000,
+                maxOutputTokens: maxTokens || 16000,
               },
             }),
           });
