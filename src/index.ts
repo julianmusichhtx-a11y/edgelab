@@ -86,7 +86,7 @@ export default {
                 { role: 'user', content: userPrompt || '' },
               ],
               temperature: temperature || 0.3,
-              max_tokens: maxTokens || 16000,
+              max_tokens: maxTokens || 8000,
             }),
           });
 
