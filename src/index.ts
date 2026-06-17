@@ -71,102 +71,42 @@ export default {
         const body = await request.json();
         const { systemPrompt, userPrompt, temperature, maxTokens, geminiKey } = body;
 
-// Try DeepSeek first
-try {
-
-    const dsResponse = await fetch(
-        'https://api.deepseek.com/chat/completions',
-        {
-            method: 'POST',
-
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${env.DEEPSEEK_API_KEY}`,
-            },
-
-            body: JSON.stringify({
-
-                model: 'deepseek-chat',
-
-                response_format: {
-                    type: 'json_object',
-                },
-
-                messages: [
-
-                    {
-                        role: 'system',
-                        content: systemPrompt || '',
-                    },
-
-                    {
-                        role: 'user',
-                        content: userPrompt || '',
-                    },
-
-                ],
-
-                temperature: temperature ?? 0.2,
-
-                max_tokens: maxTokens || 8000,
-
-            }),
-        }
-    );
-
-    if (dsResponse.ok) {
-
-        const dsData = await dsResponse.json();
-
-        const text =
-            dsData.choices?.[0]?.message?.content || '';
-
+        // Try DeepSeek first
         try {
-
-            JSON.parse(text);
-
-            return jsonResponse({
-
-                text,
-
-                provider: 'deepseek',
-
-                model: 'deepseek-chat',
-
-            });
-
-        } catch {
-
-            console.log(
-                'DeepSeek returned invalid JSON'
-            );
-
-        }
-    }
-
-    console.log(
-        'DeepSeek failed:',
-        dsResponse.status
-    );
-
-} catch (dsErr) {
-
-    console.log(
-        'DeepSeek error:',
-        dsErr.message
-    );
-
-}
+          const dsResponse = await fetch('https://api.deepseek.com/chat/completions', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${env.DEEPSEEK_API_KEY}`,
+            },
+            body: JSON.stringify({
+              model: 'deepseek-chat',
+              response_format: { type: 'json_object' },
+              messages: [
+                { role: 'system', content: systemPrompt || '' },
+                { role: 'user', content: userPrompt || '' },
+              ],
+              temperature: temperature ?? 0.2,
+              max_tokens: maxTokens || 8000,
+            }),
+          });
 
           if (dsResponse.ok) {
             const dsData = await dsResponse.json();
             const text = dsData.choices?.[0]?.message?.content || '';
-            return jsonResponse({ text, provider: 'deepseek', model: 'deepseek-v4-flash' });
+
+            // Validate it's real JSON before returning
+            try {
+              JSON.parse(text);
+              return jsonResponse({ text, provider: 'deepseek', model: 'deepseek-chat' });
+            } catch {
+              console.log('[DeepSeek] Returned invalid JSON — falling back to Gemini');
+            }
           }
 
-          console.log('DeepSeek failed, status:', dsResponse.status, '— falling back to Gemini');
+          console.log('[DeepSeek] Failed, status:', dsResponse.status, '— falling back to Gemini');
         } catch (dsErr) {
-          console.log('DeepSeek error:', dsErr.message, '— falling back to Gemini');
+          console.log('[DeepSeek] Error:', dsErr.message, '— falling back to Gemini');
         }
 
         // Fallback: Gemini
@@ -181,8 +121,9 @@ try {
               system_instruction: { parts: [{ text: systemPrompt || '' }] },
               contents: [{ parts: [{ text: userPrompt || '' }] }],
               generationConfig: {
-                temperature: temperature || 0.3,
-                maxOutputTokens: maxTokens || 16000,
+                temperature: temperature ?? 0.2,
+                maxOutputTokens: maxTokens || 8000,
+                responseMimeType: 'application/json',
               },
             }),
           });
