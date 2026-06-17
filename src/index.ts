@@ -71,24 +71,92 @@ export default {
         const body = await request.json();
         const { systemPrompt, userPrompt, temperature, maxTokens, geminiKey } = body;
 
-        // Try DeepSeek first
-        try {
-          const dsResponse = await fetch('https://api.deepseek.com/chat/completions', {
+// Try DeepSeek first
+try {
+
+    const dsResponse = await fetch(
+        'https://api.deepseek.com/chat/completions',
+        {
             method: 'POST',
+
             headers: {
-              'Content-Type': 'application/json',
-              'Authorization': 'Bearer sk-9edc49f6ba0942ceb34471ae3f142e0f',
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${env.DEEPSEEK_API_KEY}`,
             },
+
             body: JSON.stringify({
-              model: 'deepseek-chat',
-              messages: [
-                { role: 'system', content: systemPrompt || '' },
-                { role: 'user', content: userPrompt || '' },
-              ],
-              temperature: temperature || 0.3,
-              max_tokens: maxTokens || 8000,
+
+                model: 'deepseek-chat',
+
+                response_format: {
+                    type: 'json_object',
+                },
+
+                messages: [
+
+                    {
+                        role: 'system',
+                        content: systemPrompt || '',
+                    },
+
+                    {
+                        role: 'user',
+                        content: userPrompt || '',
+                    },
+
+                ],
+
+                temperature: temperature ?? 0.2,
+
+                max_tokens: maxTokens || 8000,
+
             }),
-          });
+        }
+    );
+
+    if (dsResponse.ok) {
+
+        const dsData = await dsResponse.json();
+
+        const text =
+            dsData.choices?.[0]?.message?.content || '';
+
+        try {
+
+            JSON.parse(text);
+
+            return jsonResponse({
+
+                text,
+
+                provider: 'deepseek',
+
+                model: 'deepseek-chat',
+
+            });
+
+        } catch {
+
+            console.log(
+                'DeepSeek returned invalid JSON'
+            );
+
+        }
+    }
+
+    console.log(
+        'DeepSeek failed:',
+        dsResponse.status
+    );
+
+} catch (dsErr) {
+
+    console.log(
+        'DeepSeek error:',
+        dsErr.message
+    );
+
+}
 
           if (dsResponse.ok) {
             const dsData = await dsResponse.json();
