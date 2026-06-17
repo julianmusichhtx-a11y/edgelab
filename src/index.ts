@@ -80,7 +80,7 @@ export default {
               'Authorization': 'Bearer sk-9edc49f6ba0942ceb34471ae3f142e0f',
             },
             body: JSON.stringify({
-              model: 'deepseek-v4-flash',
+              model: 'deepseek-chat',
               messages: [
                 { role: 'system', content: systemPrompt || '' },
                 { role: 'user', content: userPrompt || '' },
