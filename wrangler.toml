@@ -15,3 +15,23 @@ id = "22cacf90546d48e9af8b2d82f2c69614"
 
 [triggers]
 crons = ["0 21 * * *", "0 23 * * *", "0 0 * * *", "30 0 * * *"]
+
+# Add this section to your existing wrangler.toml
+# (Keep your existing name, main, compatibility_date, and KV bindings)
+
+# ============================================================
+# CRON TRIGGERS — runs the lineup check on a schedule
+# ============================================================
+# This is what populates LINEUP_KV so /lineup-status returns real data
+# instead of "No lineup data yet — cron may not have run"
+[triggers]
+crons = [
+  # Every 15 minutes between 3pm and 11pm Eastern (19:00–03:00 UTC)
+  # MLB lineups post 1-2 hours before first pitch, so 15-min cadence catches them quickly.
+  "*/15 19-23,0-3 * * *"
+]
+
+# Reference: cron syntax is in UTC. The expression above means:
+#   */15 = every 15 minutes
+#   19-23,0-3 = hours 19,20,21,22,23,0,1,2,3 UTC
+#   That's 3pm–11pm Eastern (covers all MLB game start times)
