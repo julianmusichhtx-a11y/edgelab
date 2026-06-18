@@ -1,28 +1,39 @@
 // ============================================================
 // UNDERDOG EDGE AI — Unified Cloudflare Worker
 // Proxy + Lineup Validation + CLV Tracking + AI (DeepSeek/Gemini)
+// MERGED: includes x-goog-api-key header, timeouts, 8000 token
+//         floor, debug logging, response_format for DeepSeek
 // ============================================================
 
 const MLB_STATS_BASE = 'https://statsapi.mlb.com/api/v1';
+
+// !! REPLACE THESE WITH YOUR REAL KEYS BEFORE DEPLOYING !!
+const GEMINI_API_KEY = 'AQ.Ab8RN6Jhxy0qf-i4vDd9Dk9Nx1X3FXtp2JyO8CQo3dqcjGQTkA';
+const DEEPSEEK_API_KEY = 'sk-9edc49f6ba0942ceb34471ae3f142e0f';
+const SHARP_API_KEY = 'sk_live_JUwiPqiq87FsTfXgXfpG63';
+const PARLAY_API_KEY = '1d8c523f514adba9f47d239b912359c0';
+
+const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
+const DEEPSEEK_URL = 'https://api.deepseek.com/v1/chat/completions';
+const MIN_DEEPSEEK_MAX_TOKENS = 8000;
+
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-API-Key',
+  'Access-Control-Max-Age': '86400',
+};
 
 export default {
   async fetch(request, env) {
     // ---- CORS preflight ----
     if (request.method === 'OPTIONS') {
-      return new Response(null, {
-        status: 204,
-        headers: {
-          'Access-Control-Allow-Origin': '*',
-          'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-          'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-API-Key',
-          'Access-Control-Max-Age': '86400',
-        }
-      });
+      return new Response(null, { status: 204, headers: CORS_HEADERS });
     }
 
     const url = new URL(request.url);
 
-    // ---- Lineup check routes ----
+    // ---- Lineup routes ----
     if (url.pathname === '/lineup-check') {
       const result = await checkLineups(env);
       return jsonResponse(result);
@@ -49,6 +60,7 @@ export default {
       }
     }
 
+    // ---- CLV / Props snapshot routes ----
     if (url.pathname === '/snapshot-props') {
       try {
         const body = await request.json();
@@ -65,125 +77,13 @@ export default {
       return jsonResponse(result);
     }
 
-    // ---- AI ENDPOINT: DeepSeek primary, Gemini fallback ----
+    // ---- AI ENDPOINT ----
     if (url.pathname === '/ai') {
-      try {
-        const body = await request.json();
-        const { systemPrompt, userPrompt, temperature, maxTokens, geminiKey } = body;
-
-        // Try DeepSeek first
-        try {
-          const dsResponse = await fetch('https://api.deepseek.com/chat/completions', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${env.DEEPSEEK_API_KEY}`,
-            },
-            body: JSON.stringify({
-              model: 'deepseek-chat',
-              response_format: { type: 'json_object' },
-              messages: [
-                { role: 'system', content: systemPrompt || '' },
-                { role: 'user', content: userPrompt || '' },
-              ],
-              temperature: temperature ?? 0.2,
-              max_tokens: maxTokens || 8000,
-            }),
-          });
-
-          if (dsResponse.ok) {
-            const dsData = await dsResponse.json();
-            const text = dsData.choices?.[0]?.message?.content || '';
-
-            // Validate it's real JSON before returning
-            try {
-              JSON.parse(text);
-              return jsonResponse({ text, provider: 'deepseek', model: 'deepseek-chat' });
-            } catch {
-              console.log('[DeepSeek] Returned invalid JSON — falling back to Gemini');
-            }
-          }
-
-          console.log('[DeepSeek] Failed, status:', dsResponse.status, '— falling back to Gemini');
-        } catch (dsErr) {
-          console.log('[DeepSeek] Error:', dsErr.message, '— falling back to Gemini');
-        }
-
-        // Fallback: Gemini
-        try {
-          const gKey = geminiKey || '';
-          const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${gKey}`;
-
-          const geminiResponse = await fetch(geminiUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              system_instruction: { parts: [{ text: systemPrompt || '' }] },
-              contents: [{ parts: [{ text: userPrompt || '' }] }],
-              generationConfig: {
-                temperature: temperature ?? 0.2,
-                maxOutputTokens: maxTokens || 8000,
-                responseMimeType: 'application/json',
-              },
-            }),
-          });
-
-          if (geminiResponse.ok) {
-            const geminiData = await geminiResponse.json();
-            const text = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || '';
-            return jsonResponse({ text, provider: 'gemini', model: 'gemini-2.5-flash' });
-          }
-
-          console.log('Gemini also failed, status:', geminiResponse.status);
-          return jsonResponse({ error: 'Both DeepSeek and Gemini failed', text: '' }, 502);
-        } catch (gemErr) {
-          return jsonResponse({ error: 'Both AI providers failed', details: gemErr.message }, 502);
-        }
-      } catch (e) {
-        return jsonResponse({ error: 'Invalid request body' }, 400);
-      }
+      return handleAI(request);
     }
 
-    // ---- EXISTING: Proxy logic ----
-    const target = url.searchParams.get('url');
-    const league = url.searchParams.get('league');
-
-    if (!target) return new Response('Missing url param', { status: 400 });
-
-    const isSharp = target.includes('sharpapi.io');
-    const isApify = target.includes('apify.com');
-    const isParlay = target.includes('parlay-api.com');
-
-    const fetchHeaders = {};
-    if (isSharp) fetchHeaders['X-API-Key'] = 'sk_live_JUwiPqiq87FsTfXgXfpG63';
-    if (isParlay) fetchHeaders['X-API-Key'] = '1d8c523f514adba9f47d239b912359c0';
-    if (isApify) fetchHeaders['Content-Type'] = 'application/json';
-
-    let fetchMethod = 'GET';
-    let fetchBody = undefined;
-
-    if (isApify && league) {
-      fetchMethod = 'POST';
-      fetchBody = JSON.stringify({ leagues: [league] });
-    }
-
-    const resp = await fetch(target, {
-      method: fetchMethod,
-      headers: fetchHeaders,
-      body: fetchBody,
-    });
-
-    const respBody = await resp.text();
-
-    return new Response(respBody, {
-      status: resp.status,
-      headers: {
-        'Content-Type': 'application/json',
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-API-Key',
-      }
-    });
+    // ---- PROXY (Apify, SharpAPI, ParlayAPI) ----
+    return handleProxy(url);
   },
 
   // ---- CRON HANDLER ----
@@ -194,14 +94,248 @@ export default {
 
 
 // ============================================================
+// AI HANDLER — Gemini primary (120s) + DeepSeek fallback
+// With Workers Paid + cpu_ms=300000, we have 5 minutes total
+// ============================================================
+
+async function handleAI(request) {
+  if (request.method !== 'POST') {
+    return jsonResponse({ error: 'Method not allowed' }, 405);
+  }
+
+  const workerStartTime = Date.now();
+  const WORKER_BUDGET_MS = 270000; // 4.5 min — leaves 30s safety margin under 5-min limit
+
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return jsonResponse({ error: 'Invalid JSON body' }, 400);
+  }
+
+  const systemPrompt = body.systemPrompt || '';
+  const userPrompt = body.userPrompt || body.prompt || '';
+  const temperature = body.temperature || 0.3;
+  const requestedMaxTokens = body.maxTokens || 8000;
+
+  if (!userPrompt) {
+    return jsonResponse({ error: 'Missing prompt / userPrompt' }, 400);
+  }
+
+  const deepseekMaxTokens = Math.max(requestedMaxTokens, MIN_DEEPSEEK_MAX_TOKENS);
+  console.log('[WORKER] budget: 5min mode | requestedMaxTokens:', requestedMaxTokens, 'deepseekMaxTokens:', deepseekMaxTokens);
+
+  let geminiError = null;
+
+  // ===== PRIMARY: Gemini 2.5 Flash (120s timeout) =====
+  try {
+    const geminiController = new AbortController();
+    const geminiTimeout = setTimeout(() => geminiController.abort(), 120000); // 2 full minutes
+
+    const combinedPrompt = systemPrompt
+      ? systemPrompt + '\n\n' + userPrompt
+      : userPrompt;
+
+    const geminiBody = {
+      contents: [{ parts: [{ text: combinedPrompt }] }],
+      generationConfig: {
+        temperature,
+        maxOutputTokens: 65536,
+        responseMimeType: 'application/json',
+        thinkingConfig: { thinkingBudget: 0 },
+      },
+    };
+
+    if (systemPrompt) {
+      geminiBody.system_instruction = { parts: [{ text: systemPrompt }] };
+      geminiBody.contents = [{ parts: [{ text: userPrompt }] }];
+    }
+
+    console.log('[GEMINI] starting (primary, 120s timeout), t=' + (Date.now() - workerStartTime) + 'ms');
+
+    const geminiResponse = await fetch(GEMINI_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-goog-api-key': GEMINI_API_KEY,
+      },
+      body: JSON.stringify(geminiBody),
+      signal: geminiController.signal,
+    });
+
+    clearTimeout(geminiTimeout);
+    console.log('[GEMINI] status:', geminiResponse.status, 't=' + (Date.now() - workerStartTime) + 'ms');
+
+    if (!geminiResponse.ok) {
+      const errText = await geminiResponse.text();
+      console.log('[GEMINI] error body:', errText.substring(0, 500));
+      geminiError = 'HTTP ' + geminiResponse.status + ': ' + errText.substring(0, 200);
+      throw new Error(geminiError);
+    }
+
+    const geminiData = await geminiResponse.json();
+    const geminiText = geminiData?.candidates?.[0]?.content?.parts?.[0]?.text;
+
+    if (!geminiText) {
+      console.log('[GEMINI] empty candidates:', JSON.stringify(geminiData?.candidates || []).substring(0, 300));
+      geminiError = 'Empty Gemini response (possible safety filter)';
+      throw new Error(geminiError);
+    }
+
+    console.log('[GEMINI] SUCCESS length:', geminiText.length, 't=' + (Date.now() - workerStartTime) + 'ms');
+    return jsonResponse({
+      text: geminiText,
+      provider: 'gemini',
+      model: 'gemini-2.5-flash',
+      elapsed: Date.now() - workerStartTime,
+    });
+
+  } catch (err) {
+    geminiError = geminiError || (err.name + ': ' + err.message);
+    console.log('[GEMINI FAILED]', geminiError, 't=' + (Date.now() - workerStartTime) + 'ms');
+  }
+
+  // ===== FALLBACK: DeepSeek =====
+  const remainingTime = WORKER_BUDGET_MS - (Date.now() - workerStartTime);
+  console.log('[DEEPSEEK] entering fallback, remaining:', remainingTime + 'ms');
+
+  if (remainingTime < 5000) {
+    return jsonResponse({
+      error: 'Both providers failed. Gemini: ' + geminiError + '. Insufficient time for DeepSeek.',
+      geminiError,
+    }, 504);
+  }
+
+  try {
+    const dsController = new AbortController();
+    const dsTimeout = setTimeout(() => dsController.abort(), Math.min(remainingTime - 1000, 120000));
+
+    const messages = [];
+    if (systemPrompt) {
+      messages.push({ role: 'system', content: systemPrompt });
+    } else {
+      messages.push({ role: 'system', content: 'You are a sports betting analyst. Always respond with valid JSON only, no markdown.' });
+    }
+    messages.push({ role: 'user', content: userPrompt });
+
+    const dsBody = {
+      model: 'deepseek-chat',
+      messages,
+      temperature,
+      max_tokens: deepseekMaxTokens,
+      response_format: { type: 'json_object' },
+    };
+
+    console.log('[DEEPSEEK] starting fallback, max_tokens:', deepseekMaxTokens, 't=' + (Date.now() - workerStartTime) + 'ms');
+
+    const dsResponse = await fetch(DEEPSEEK_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + DEEPSEEK_API_KEY,
+      },
+      body: JSON.stringify(dsBody),
+      signal: dsController.signal,
+    });
+
+    clearTimeout(dsTimeout);
+    console.log('[DEEPSEEK] status:', dsResponse.status, 't=' + (Date.now() - workerStartTime) + 'ms');
+
+    if (!dsResponse.ok) {
+      const errText = await dsResponse.text();
+      console.log('[DEEPSEEK] error body:', errText.substring(0, 500));
+      return jsonResponse({
+        error: 'DeepSeek HTTP ' + dsResponse.status + ': ' + errText.substring(0, 200),
+        geminiError,
+      }, 502);
+    }
+
+    const dsData = await dsResponse.json();
+    const dsText = dsData?.choices?.[0]?.message?.content;
+    const finishReason = dsData?.choices?.[0]?.finish_reason;
+
+    if (!dsText) {
+      return jsonResponse({ error: 'Empty DeepSeek response', geminiError }, 502);
+    }
+
+    console.log('[DEEPSEEK] SUCCESS length:', dsText.length, 'finish_reason:', finishReason, 't=' + (Date.now() - workerStartTime) + 'ms');
+    if (finishReason === 'length') {
+      console.log('[DEEPSEEK WARNING] hit max_tokens limit — response may be truncated');
+    }
+
+    return jsonResponse({
+      text: dsText,
+      provider: 'deepseek',
+      model: 'deepseek-chat',
+      finishReason,
+      geminiError,
+      elapsed: Date.now() - workerStartTime,
+    });
+
+  } catch (err) {
+    console.log('[DEEPSEEK FAILED]', err.name, err.message, 't=' + (Date.now() - workerStartTime) + 'ms');
+    return jsonResponse({
+      error: 'Both providers failed. Gemini: ' + geminiError + '. DeepSeek: ' + err.message,
+      geminiError,
+      deepseekError: err.message,
+    }, 502);
+  }
+}
+
+
+// ============================================================
+// PROXY HANDLER (Apify, SharpAPI, ParlayAPI)
+// ============================================================
+
+async function handleProxy(url) {
+  const target = url.searchParams.get('url');
+  const league = url.searchParams.get('league');
+
+  if (!target) return new Response('Missing url param', { status: 400, headers: CORS_HEADERS });
+
+  const isSharp = target.includes('sharpapi.io');
+  const isApify = target.includes('apify.com');
+  const isParlay = target.includes('parlay-api.com');
+
+  const fetchHeaders = {};
+  if (isSharp) fetchHeaders['X-API-Key'] = SHARP_API_KEY;
+  if (isParlay) fetchHeaders['X-API-Key'] = PARLAY_API_KEY;
+  if (isApify) fetchHeaders['Content-Type'] = 'application/json';
+
+  let fetchMethod = 'GET';
+  let fetchBody = undefined;
+
+  if (isApify && league) {
+    fetchMethod = 'POST';
+    fetchBody = JSON.stringify({ leagues: [league] });
+  }
+
+  const resp = await fetch(target, {
+    method: fetchMethod,
+    headers: fetchHeaders,
+    body: fetchBody,
+  });
+
+  const respBody = await resp.text();
+
+  return new Response(respBody, {
+    status: resp.status,
+    headers: {
+      'Content-Type': 'application/json',
+      ...CORS_HEADERS,
+    },
+  });
+}
+
+
+// ============================================================
 // CRON HANDLER
 // ============================================================
 
 async function handleScheduled(event, env) {
-  console.log(`Cron fired at ${new Date().toISOString()}`);
-
+  console.log('Cron fired at ' + new Date().toISOString());
   const lineupResult = await checkLineups(env);
-  console.log(`Lineup check: ${lineupResult.confirmed} confirmed, ${lineupResult.notConfirmed} pending`);
+  console.log('Lineup check: ' + lineupResult.confirmed + ' confirmed, ' + lineupResult.notConfirmed + ' pending');
 }
 
 
@@ -213,7 +347,7 @@ async function checkLineups(env) {
   const today = getTodayDateString();
 
   const scheduleRes = await fetch(
-    `${MLB_STATS_BASE}/schedule?sportId=1&date=${today}&hydrate=probablePitcher,lineups`
+    MLB_STATS_BASE + '/schedule?sportId=1&date=' + today + '&hydrate=probablePitcher,lineups'
   );
   const schedule = await scheduleRes.json();
 
@@ -234,7 +368,7 @@ async function checkLineups(env) {
     let homeLineup = [];
 
     try {
-      const boxRes = await fetch(`${MLB_STATS_BASE}/game/${gameId}/boxscore`);
+      const boxRes = await fetch(MLB_STATS_BASE + '/game/' + gameId + '/boxscore');
       const box = await boxRes.json();
       awayLineup = extractLineup(box?.teams?.away);
       homeLineup = extractLineup(box?.teams?.home);
@@ -290,7 +424,7 @@ async function checkLineups(env) {
 
   if (env.LINEUP_KV) {
     await env.LINEUP_KV.put(
-      `lineups:${today}`,
+      'lineups:' + today,
       JSON.stringify(playerStatuses),
       { expirationTtl: 86400 }
     );
@@ -310,13 +444,12 @@ async function checkLineups(env) {
 
 function extractLineup(teamBox) {
   if (!teamBox?.battingOrder || teamBox.battingOrder.length === 0) return [];
-
   const players = teamBox.players || {};
   return teamBox.battingOrder.map((playerId, idx) => {
-    const player = players[`ID${playerId}`] || {};
+    const player = players['ID' + playerId] || {};
     return {
       id: playerId,
-      fullName: player.person?.fullName || `Player ${playerId}`,
+      fullName: player.person?.fullName || ('Player ' + playerId),
       team: teamBox.team?.name || 'Unknown',
       battingOrder: idx + 1,
     };
@@ -334,7 +467,7 @@ async function getPlayerLineupStatus(playerName, env) {
   }
 
   const today = getTodayDateString();
-  const data = await env.LINEUP_KV.get(`lineups:${today}`, 'json');
+  const data = await env.LINEUP_KV.get('lineups:' + today, 'json');
 
   if (!data) {
     return { status: 'NOT_CONFIRMED', reason: 'No lineup data yet — cron may not have run' };
@@ -367,7 +500,7 @@ async function getPlayerLineupStatus(playerName, env) {
 
 
 // ============================================================
-// PROP SNAPSHOTS (for CLV tracking)
+// PROP SNAPSHOTS (CLV tracking)
 // ============================================================
 
 async function savePropsSnapshot(props, env) {
@@ -380,7 +513,7 @@ async function savePropsSnapshot(props, env) {
 
   let saved = 0;
   for (const prop of props) {
-    const key = `prop:${today}:${prop.playerId || prop.playerName}:${prop.propType}:${timestamp}`;
+    const key = 'prop:' + today + ':' + (prop.playerId || prop.playerName) + ':' + prop.propType + ':' + timestamp;
     await env.LINEUP_KV.put(key, JSON.stringify({
       ...prop,
       timestamp,
@@ -390,7 +523,7 @@ async function savePropsSnapshot(props, env) {
   }
 
   for (const prop of props) {
-    const latestKey = `latest:${today}:${prop.playerId || prop.playerName}:${prop.propType}`;
+    const latestKey = 'latest:' + today + ':' + (prop.playerId || prop.playerName) + ':' + prop.propType;
     await env.LINEUP_KV.put(latestKey, JSON.stringify({
       ...prop,
       timestamp,
@@ -406,14 +539,12 @@ async function getClosingLines(gameDate, env) {
     return { error: 'KV not configured' };
   }
 
-  const list = await env.LINEUP_KV.list({ prefix: `latest:${gameDate}:` });
+  const list = await env.LINEUP_KV.list({ prefix: 'latest:' + gameDate + ':' });
   const closingLines = [];
 
   for (const key of list.keys) {
     const data = await env.LINEUP_KV.get(key.name, 'json');
-    if (data) {
-      closingLines.push(data);
-    }
+    if (data) closingLines.push(data);
   }
 
   return { gameDate, count: closingLines.length, lines: closingLines };
@@ -424,14 +555,12 @@ async function getClosingLines(gameDate, env) {
 // UTILITIES
 // ============================================================
 
-function jsonResponse(data, status = 200) {
-  return new Response(JSON.stringify(data, null, 2), {
-    status,
+function jsonResponse(data, status) {
+  return new Response(JSON.stringify(data), {
+    status: status || 200,
     headers: {
       'Content-Type': 'application/json',
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-API-Key',
+      ...CORS_HEADERS,
     },
   });
 }
@@ -442,5 +571,5 @@ function getTodayDateString() {
   const year = eastern.getFullYear();
   const month = String(eastern.getMonth() + 1).padStart(2, '0');
   const day = String(eastern.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+  return year + '-' + month + '-' + day;
 }
