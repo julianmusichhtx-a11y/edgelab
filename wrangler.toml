@@ -1,5 +1,5 @@
 name = "edgelab"
-main = "worker-unified.js"
+main = "src/index.ts"
 compatibility_date = "2025-03-27"
 
 # Extended CPU limit — requires Workers Paid plan ($5/mo)
