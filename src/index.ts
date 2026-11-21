@@ -12,14 +12,8 @@ var __name = (target, value) => __defProp(target, "name", { value, configurable:
 
 // src/index.ts
 var MLB_STATS_BASE = "https://statsapi.mlb.com/api/v1";
-var GEMINI_API_KEY = "AQ.Ab8RN6IA3PgAannoLdEph--PINEtQI46Nz1ZBq7QMKk4r9xM7A";
-var DEEPSEEK_API_KEY = "sk-9edc49f6ba0942ceb34471ae3f142e0f";
-var SHARP_API_KEY = "sk_live_JUwiPqiq87FsTfXgXfpG63";
-var PARLAY_API_KEY = "1d8c523f514adba9f47d239b912359c0";
-var THE_ODDS_API_KEY = "f7799b2d6c48116a21658bc06dc4746c";
-var SPORTSDATAIO_MLB_API_KEY = "d4fd4cb3680244f4b108aab6de86ca95";
-var OPENWEATHER_API_KEY = "6fa7ee8cb82058ced5c0cbe96d9ab8bc";
-var SPORTRADAR_API_KEY = "ZhCxRp1EtW5BnG3AsSJl65j4okjKf418lCwkBkPK";
+// Credentials are supplied exclusively through Cloudflare Worker secrets.
+
 var SPORTRADAR_ACCESS_LEVEL = "trial";
 var SPORTRADAR_LANGUAGE_CODE = "en";
 var GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent";
@@ -31,7 +25,7 @@ var SPORTRADAR_BASE = "https://api.sportradar.us/mlb";
 var MIN_DEEPSEEK_MAX_TOKENS = 8e3;
 
 // ---- Multi-sport Sportradar config ----
-// Same SPORTRADAR_API_KEY is reused across all sports below.
+// Same env.SPORTRADAR_API_KEY is reused across all sports below.
 // Each sport has its own base path / version / language since
 // Sportradar's endpoint shapes differ per sport.
 var SPORTRADAR_SPORT_CONFIG = {
@@ -124,67 +118,70 @@ var index_default = {
       return jsonResponse(result);
     }
     if (url.pathname === "/api-status") {
-      return handleApiStatus();
+      return handleApiStatus(env);
     }
     if (url.pathname === "/odds/mlb/events") {
-      return handleOddsMlbEvents(url);
+      return handleOddsMlbEvents(url, env);
     }
     if (url.pathname === "/odds/mlb/player-props") {
-      return handleOddsMlbPlayerProps(url);
+      return handleOddsMlbPlayerProps(url, env);
     }
     if (url.pathname === "/sportsdataio/mlb/games") {
-      return handleSportsDataIOGames(url);
+      return handleSportsDataIOGames(url, env);
     }
     if (url.pathname === "/sportsdataio/mlb/lineups") {
-      return handleSportsDataIOLineups(url);
+      return handleSportsDataIOLineups(url, env);
     }
     if (url.pathname === "/sportsdataio/mlb/injuries") {
-      return handleSportsDataIOInjuries(url);
+      return handleSportsDataIOInjuries(url, env);
     }
     if (url.pathname === "/sportsdataio/mlb/projections") {
-      return handleSportsDataIOProjections(url);
+      return handleSportsDataIOProjections(url, env);
     }
     if (url.pathname === "/weather/game") {
-      return handleOpenWeatherGame(url);
+      return handleOpenWeatherGame(url, env);
     }
     if (url.pathname === "/sportradar/mlb/schedule") {
-      return handleSportradarSchedule(url);
+      return handleSportradarSchedule(url, env);
     }
     if (url.pathname === "/sportradar/mlb/game-summary") {
-      return handleSportradarGameSummary(url);
+      return handleSportradarGameSummary(url, env);
     }
     if (url.pathname === "/sportradar/mlb/injuries") {
-      return handleSportradarInjuries(url);
+      return handleSportradarInjuries(url, env);
     }
     if (url.pathname === "/sportradar/status") {
-      return handleSportradarStatus();
+      return handleSportradarStatus(env);
     }
     if (url.pathname.startsWith("/sportradar/") && url.pathname.endsWith("/schedule")) {
-      return handleSportradarMultiSportSchedule(url);
+      return handleSportradarMultiSportSchedule(url, env);
     }
     if (url.pathname.startsWith("/sportradar/") && url.pathname.endsWith("/summary")) {
-      return handleSportradarMultiSportSummary(url);
+      return handleSportradarMultiSportSummary(url, env);
     }
     if (url.pathname.startsWith("/sportradar/") && url.pathname.endsWith("/team-profile")) {
-      return handleSportradarTeamProfile(url);
+      return handleSportradarTeamProfile(url, env);
     }
     if (url.pathname.startsWith("/sportradar/") && url.pathname.endsWith("/player-profile")) {
-      return handleSportradarPlayerProfile(url);
+      return handleSportradarPlayerProfile(url, env);
     }
     if (url.pathname === "/sportradar/odds/player-props") {
-      return handleSportradarPlayerProps(url);
+      return handleSportradarPlayerProps(url, env);
     }
     if (url.pathname === "/ai") {
-      return handleAI(request);
+      return handleAI(request, env);
     }
-    return handleProxy(url);
+    if (url.pathname === "/predict" || url.pathname === "/analyze") {
+      return proxyPredictionRequest(request, env);
+    }
+    return jsonResponse({ error: "Route not found" }, 404);
   },
   // ---- CRON HANDLER ----
   async scheduled(event, env, ctx) {
     ctx.waitUntil(handleScheduled(event, env));
   }
 };
-async function handleAI(request) {
+async function handleAI(request, env) {
   if (request.method !== "POST") {
     return jsonResponse({ error: "Method not allowed" }, 405);
   }
@@ -228,7 +225,7 @@ async function handleAI(request) {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "x-goog-api-key": GEMINI_API_KEY
+        "x-goog-api-key": env.GEMINI_API_KEY
       },
       body: JSON.stringify(geminiBody),
       signal: geminiController.signal
@@ -289,7 +286,7 @@ async function handleAI(request) {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "Authorization": "Bearer " + DEEPSEEK_API_KEY
+        "Authorization": "Bearer " + env.DEEPSEEK_API_KEY
       },
       body: JSON.stringify(dsBody),
       signal: dsController.signal
@@ -332,38 +329,28 @@ async function handleAI(request) {
   }
 }
 __name(handleAI, "handleAI");
-async function handleProxy(url) {
-  const target = url.searchParams.get("url");
-  const league = url.searchParams.get("league");
-  if (!target) return new Response("Missing url param", { status: 400, headers: CORS_HEADERS });
-  const isSharp = target.includes("sharpapi.io");
-  const isApify = target.includes("apify.com");
-  const isParlay = target.includes("parlay-api.com");
-  const fetchHeaders = {};
-  if (isSharp) fetchHeaders["X-API-Key"] = SHARP_API_KEY;
-  if (isParlay) fetchHeaders["X-API-Key"] = PARLAY_API_KEY;
-  if (isApify) fetchHeaders["Content-Type"] = "application/json";
-  let fetchMethod = "GET";
-  let fetchBody = void 0;
-  if (isApify && league) {
-    fetchMethod = "POST";
-    fetchBody = JSON.stringify({ leagues: [league] });
+async function proxyPredictionRequest(request, env) {
+  if (request.method !== "POST") {
+    return jsonResponse({ error: "Method not allowed" }, 405);
   }
-  const resp = await fetch(target, {
-    method: fetchMethod,
-    headers: fetchHeaders,
-    body: fetchBody
+  const origin = (env.PREDICTION_API_ORIGIN || "").replace(/\/$/, "");
+  if (!origin) {
+    return jsonResponse({ error: "Prediction API is not configured" }, 503);
+  }
+  const upstream = await fetch(`${origin}${new URL(request.url).pathname}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: request.body
   });
-  const respBody = await resp.text();
-  return new Response(respBody, {
-    status: resp.status,
+  return new Response(upstream.body, {
+    status: upstream.status,
     headers: {
-      "Content-Type": "application/json",
+      "Content-Type": upstream.headers.get("Content-Type") || "application/json",
       ...CORS_HEADERS
     }
   });
 }
-__name(handleProxy, "handleProxy");
+__name(proxyPredictionRequest, "proxyPredictionRequest");
 async function handleScheduled(event, env) {
   console.log("Cron fired at " + (/* @__PURE__ */ new Date()).toISOString());
   const lineupResult = await checkLineups(env);
@@ -562,25 +549,25 @@ function getTodayDateString() {
   return year + "-" + month + "-" + day;
 }
 __name(getTodayDateString, "getTodayDateString");
-async function handleApiStatus() {
+async function handleApiStatus(env) {
   return jsonResponse({
-    hasTheOddsApi: !!THE_ODDS_API_KEY,
-    hasSportsDataIO: !!SPORTSDATAIO_MLB_API_KEY,
-    hasOpenWeather: !!OPENWEATHER_API_KEY,
-    hasSportradar: !!SPORTRADAR_API_KEY,
-    hasGemini: !!GEMINI_API_KEY,
-    hasDeepSeek: !!DEEPSEEK_API_KEY,
-    hasSharp: !!SHARP_API_KEY,
-    hasParlay: !!PARLAY_API_KEY,
+    hasTheOddsApi: !!env.THE_ODDS_API_KEY,
+    hasSportsDataIO: !!env.SPORTSDATAIO_MLB_API_KEY,
+    hasOpenWeather: !!env.OPENWEATHER_API_KEY,
+    hasSportradar: !!env.SPORTRADAR_API_KEY,
+    hasGemini: !!env.GEMINI_API_KEY,
+    hasDeepSeek: !!env.DEEPSEEK_API_KEY,
+    hasSharp: !!env.SHARP_API_KEY,
+    hasParlay: !!env.PARLAY_API_KEY,
     sportradarAccessLevel: SPORTRADAR_ACCESS_LEVEL || "trial",
     sportradarLanguage: SPORTRADAR_LANGUAGE_CODE || "en",
     fetchedAt: (/* @__PURE__ */ new Date()).toISOString()
   });
 }
 __name(handleApiStatus, "handleApiStatus");
-async function handleOddsMlbEvents(url) {
-  const apiKey = THE_ODDS_API_KEY;
-  if (!apiKey) return providerResponse("The Odds API", "skipped", [], "Missing THE_ODDS_API_KEY");
+async function handleOddsMlbEvents(url, env) {
+  const apiKey = env.THE_ODDS_API_KEY;
+  if (!apiKey) return providerResponse("The Odds API", "skipped", [], "Missing env.THE_ODDS_API_KEY");
   const regions = url.searchParams.get("regions") || "us";
   const oddsFormat = url.searchParams.get("oddsFormat") || "american";
   const target = THE_ODDS_BASE + "/sports/baseball_mlb/events?" + new URLSearchParams({ apiKey, regions, oddsFormat }).toString();
@@ -595,9 +582,9 @@ async function handleOddsMlbEvents(url) {
   }
 }
 __name(handleOddsMlbEvents, "handleOddsMlbEvents");
-async function handleOddsMlbPlayerProps(url) {
-  const apiKey = THE_ODDS_API_KEY;
-  if (!apiKey) return providerResponse("The Odds API", "skipped", [], "Missing THE_ODDS_API_KEY");
+async function handleOddsMlbPlayerProps(url, env) {
+  const apiKey = env.THE_ODDS_API_KEY;
+  if (!apiKey) return providerResponse("The Odds API", "skipped", [], "Missing env.THE_ODDS_API_KEY");
   const regions = url.searchParams.get("regions") || "us";
   const oddsFormat = url.searchParams.get("oddsFormat") || "american";
   const eventId = url.searchParams.get("eventId");
@@ -643,29 +630,29 @@ async function fetchOddsForEvent(eventId, apiKey, regions, oddsFormat, markets) 
   return fetchJson(target);
 }
 __name(fetchOddsForEvent, "fetchOddsForEvent");
-async function handleSportsDataIOGames(url) {
-  const apiKey = SPORTSDATAIO_MLB_API_KEY;
-  if (!apiKey) return providerResponse("SportsDataIO", "skipped", [], "Missing SPORTSDATAIO_MLB_API_KEY");
+async function handleSportsDataIOGames(url, env) {
+  const apiKey = env.SPORTSDATAIO_MLB_API_KEY;
+  if (!apiKey) return providerResponse("SportsDataIO", "skipped", [], "Missing env.SPORTSDATAIO_MLB_API_KEY");
   const date = url.searchParams.get("date") || getTodayDateString();
   return sportsDataIOFetch("SportsDataIO", "/scores/json/GamesByDate/" + date, apiKey, (data) => ({ games: Array.isArray(data) ? data : [] }));
 }
 __name(handleSportsDataIOGames, "handleSportsDataIOGames");
-async function handleSportsDataIOLineups(url) {
-  const apiKey = SPORTSDATAIO_MLB_API_KEY;
-  if (!apiKey) return providerResponse("SportsDataIO", "skipped", [], "Missing SPORTSDATAIO_MLB_API_KEY");
+async function handleSportsDataIOLineups(url, env) {
+  const apiKey = env.SPORTSDATAIO_MLB_API_KEY;
+  if (!apiKey) return providerResponse("SportsDataIO", "skipped", [], "Missing env.SPORTSDATAIO_MLB_API_KEY");
   const date = url.searchParams.get("date") || getTodayDateString();
   return sportsDataIOFetch("SportsDataIO", "/projections/json/StartingLineupsByDate/" + date, apiKey, (data) => ({ players: normalizeSportsDataIOLineups(data) }));
 }
 __name(handleSportsDataIOLineups, "handleSportsDataIOLineups");
-async function handleSportsDataIOInjuries(url) {
-  const apiKey = SPORTSDATAIO_MLB_API_KEY;
-  if (!apiKey) return providerResponse("SportsDataIO", "skipped", [], "Missing SPORTSDATAIO_MLB_API_KEY");
+async function handleSportsDataIOInjuries(url, env) {
+  const apiKey = env.SPORTSDATAIO_MLB_API_KEY;
+  if (!apiKey) return providerResponse("SportsDataIO", "skipped", [], "Missing env.SPORTSDATAIO_MLB_API_KEY");
   return sportsDataIOFetch("SportsDataIO", "/scores/json/Injuries", apiKey, (data) => ({ injuries: normalizeSportsDataIOInjuries(data) }));
 }
 __name(handleSportsDataIOInjuries, "handleSportsDataIOInjuries");
-async function handleSportsDataIOProjections(url) {
-  const apiKey = SPORTSDATAIO_MLB_API_KEY;
-  if (!apiKey) return providerResponse("SportsDataIO", "skipped", [], "Missing SPORTSDATAIO_MLB_API_KEY");
+async function handleSportsDataIOProjections(url, env) {
+  const apiKey = env.SPORTSDATAIO_MLB_API_KEY;
+  if (!apiKey) return providerResponse("SportsDataIO", "skipped", [], "Missing env.SPORTSDATAIO_MLB_API_KEY");
   const date = url.searchParams.get("date") || getTodayDateString();
   return sportsDataIOFetch("SportsDataIO", "/projections/json/PlayerGameProjectionStatsByDate/" + date, apiKey, (data) => ({ projections: normalizeSportsDataIOProjections(data) }));
 }
@@ -686,9 +673,9 @@ async function sportsDataIOFetch(source, path, apiKey, normalizer) {
   }
 }
 __name(sportsDataIOFetch, "sportsDataIOFetch");
-async function handleOpenWeatherGame(url) {
-  const apiKey = OPENWEATHER_API_KEY;
-  if (!apiKey) return providerResponse("OpenWeather", "skipped", [], "Missing OPENWEATHER_API_KEY");
+async function handleOpenWeatherGame(url, env) {
+  const apiKey = env.OPENWEATHER_API_KEY;
+  if (!apiKey) return providerResponse("OpenWeather", "skipped", [], "Missing env.OPENWEATHER_API_KEY");
   const city = url.searchParams.get("city");
   const lat = url.searchParams.get("lat");
   const lon = url.searchParams.get("lon");
@@ -707,9 +694,9 @@ async function handleOpenWeatherGame(url) {
 __name(handleOpenWeatherGame, "handleOpenWeatherGame");
 
 // ---- Existing MLB-only Sportradar handlers (unchanged paths/behavior) ----
-async function handleSportradarSchedule(url) {
-  const apiKey = SPORTRADAR_API_KEY;
-  if (!apiKey) return providerResponse("Sportradar", "skipped", [], "Missing SPORTRADAR_API_KEY");
+async function handleSportradarSchedule(url, env) {
+  const apiKey = env.SPORTRADAR_API_KEY;
+  if (!apiKey) return providerResponse("Sportradar", "skipped", [], "Missing env.SPORTRADAR_API_KEY");
   const date = url.searchParams.get("date") || getTodayDateString();
   const access = SPORTRADAR_ACCESS_LEVEL || "trial";
   const language = SPORTRADAR_LANGUAGE_CODE || "en";
@@ -724,9 +711,9 @@ async function handleSportradarSchedule(url) {
   }
 }
 __name(handleSportradarSchedule, "handleSportradarSchedule");
-async function handleSportradarGameSummary(url) {
-  const apiKey = SPORTRADAR_API_KEY;
-  if (!apiKey) return providerResponse("Sportradar", "skipped", [], "Missing SPORTRADAR_API_KEY");
+async function handleSportradarGameSummary(url, env) {
+  const apiKey = env.SPORTRADAR_API_KEY;
+  if (!apiKey) return providerResponse("Sportradar", "skipped", [], "Missing env.SPORTRADAR_API_KEY");
   const gameId = url.searchParams.get("gameId");
   if (!gameId) return jsonResponse({ source: "Sportradar", status: "failed", error: "Missing gameId" }, 400);
   const access = SPORTRADAR_ACCESS_LEVEL || "trial";
@@ -740,9 +727,9 @@ async function handleSportradarGameSummary(url) {
   }
 }
 __name(handleSportradarGameSummary, "handleSportradarGameSummary");
-async function handleSportradarInjuries(url) {
-  const apiKey = SPORTRADAR_API_KEY;
-  if (!apiKey) return providerResponse("Sportradar", "skipped", [], "Missing SPORTRADAR_API_KEY");
+async function handleSportradarInjuries(url, env) {
+  const apiKey = env.SPORTRADAR_API_KEY;
+  if (!apiKey) return providerResponse("Sportradar", "skipped", [], "Missing env.SPORTRADAR_API_KEY");
   const access = SPORTRADAR_ACCESS_LEVEL || "trial";
   const language = SPORTRADAR_LANGUAGE_CODE || "en";
   const target = SPORTRADAR_BASE + "/" + access + "/v8/" + language + "/league/injuries.json?" + new URLSearchParams({ api_key: apiKey }).toString();
@@ -790,9 +777,9 @@ function extractSportFromPath(pathname, suffix) {
   return parts[1];
 }
 __name(extractSportFromPath, "extractSportFromPath");
-async function handleSportradarStatus() {
+async function handleSportradarStatus(env) {
   return jsonResponse({
-    hasSportradarKey: !!SPORTRADAR_API_KEY,
+    hasSportradarKey: !!env.SPORTRADAR_API_KEY,
     accessLevel: SPORTRADAR_ACCESS_LEVEL || "trial",
     language: SPORTRADAR_LANGUAGE_CODE || "en",
     enabledSports: Object.keys(SPORTRADAR_SPORT_CONFIG),
@@ -802,12 +789,12 @@ async function handleSportradarStatus() {
   });
 }
 __name(handleSportradarStatus, "handleSportradarStatus");
-async function handleSportradarMultiSportSchedule(url) {
+async function handleSportradarMultiSportSchedule(url, env) {
   const sport = normalizeSportradarSport(extractSportFromPath(url.pathname, "schedule"));
   const cfg = getSportradarConfig(sport);
   if (!cfg) return unsupportedSportResponse(sport);
-  const apiKey = SPORTRADAR_API_KEY;
-  if (!apiKey) return providerResponse("Sportradar " + cfg.label, "skipped", [], "Missing SPORTRADAR_API_KEY");
+  const apiKey = env.SPORTRADAR_API_KEY;
+  if (!apiKey) return providerResponse("Sportradar " + cfg.label, "skipped", [], "Missing env.SPORTRADAR_API_KEY");
   const date = url.searchParams.get("date") || getTodayDateString();
   const [year, month, day] = date.split("-");
   const path = "/games/" + year + "/" + month + "/" + day + "/schedule.json";
@@ -831,12 +818,12 @@ async function handleSportradarMultiSportSchedule(url) {
   }
 }
 __name(handleSportradarMultiSportSchedule, "handleSportradarMultiSportSchedule");
-async function handleSportradarMultiSportSummary(url) {
+async function handleSportradarMultiSportSummary(url, env) {
   const sport = normalizeSportradarSport(extractSportFromPath(url.pathname, "summary"));
   const cfg = getSportradarConfig(sport);
   if (!cfg) return unsupportedSportResponse(sport);
-  const apiKey = SPORTRADAR_API_KEY;
-  if (!apiKey) return providerResponse("Sportradar " + cfg.label, "skipped", [], "Missing SPORTRADAR_API_KEY");
+  const apiKey = env.SPORTRADAR_API_KEY;
+  if (!apiKey) return providerResponse("Sportradar " + cfg.label, "skipped", [], "Missing env.SPORTRADAR_API_KEY");
   const gameId = url.searchParams.get("gameId") || url.searchParams.get("matchId");
   if (!gameId) return jsonResponse({ source: "Sportradar " + cfg.label, sport, status: "failed", error: "Missing gameId" }, 400);
   const path = "/games/" + encodeURIComponent(gameId) + "/summary.json";
@@ -857,12 +844,12 @@ async function handleSportradarMultiSportSummary(url) {
   }
 }
 __name(handleSportradarMultiSportSummary, "handleSportradarMultiSportSummary");
-async function handleSportradarTeamProfile(url) {
+async function handleSportradarTeamProfile(url, env) {
   const sport = normalizeSportradarSport(extractSportFromPath(url.pathname, "team-profile"));
   const cfg = getSportradarConfig(sport);
   if (!cfg) return unsupportedSportResponse(sport);
-  const apiKey = SPORTRADAR_API_KEY;
-  if (!apiKey) return providerResponse("Sportradar " + cfg.label, "skipped", [], "Missing SPORTRADAR_API_KEY");
+  const apiKey = env.SPORTRADAR_API_KEY;
+  if (!apiKey) return providerResponse("Sportradar " + cfg.label, "skipped", [], "Missing env.SPORTRADAR_API_KEY");
   const teamId = url.searchParams.get("teamId");
   if (!teamId) return jsonResponse({ source: "Sportradar " + cfg.label, sport, status: "failed", error: "Missing teamId" }, 400);
   const path = "/teams/" + encodeURIComponent(teamId) + "/profile.json";
@@ -882,12 +869,12 @@ async function handleSportradarTeamProfile(url) {
   }
 }
 __name(handleSportradarTeamProfile, "handleSportradarTeamProfile");
-async function handleSportradarPlayerProfile(url) {
+async function handleSportradarPlayerProfile(url, env) {
   const sport = normalizeSportradarSport(extractSportFromPath(url.pathname, "player-profile"));
   const cfg = getSportradarConfig(sport);
   if (!cfg) return unsupportedSportResponse(sport);
-  const apiKey = SPORTRADAR_API_KEY;
-  if (!apiKey) return providerResponse("Sportradar " + cfg.label, "skipped", [], "Missing SPORTRADAR_API_KEY");
+  const apiKey = env.SPORTRADAR_API_KEY;
+  if (!apiKey) return providerResponse("Sportradar " + cfg.label, "skipped", [], "Missing env.SPORTRADAR_API_KEY");
   const playerId = url.searchParams.get("playerId");
   if (!playerId) return jsonResponse({ source: "Sportradar " + cfg.label, sport, status: "failed", error: "Missing playerId" }, 400);
   const path = "/players/" + encodeURIComponent(playerId) + "/profile.json";
@@ -907,12 +894,12 @@ async function handleSportradarPlayerProfile(url) {
   }
 }
 __name(handleSportradarPlayerProfile, "handleSportradarPlayerProfile");
-async function handleSportradarPlayerProps(url) {
+async function handleSportradarPlayerProps(url, env) {
   const sport = normalizeSportradarSport(url.searchParams.get("sport") || "mlb");
   const cfg = getSportradarConfig(sport);
   if (!cfg) return unsupportedSportResponse(sport);
-  const apiKey = SPORTRADAR_API_KEY;
-  if (!apiKey) return providerResponse("Sportradar Odds Player Props", "skipped", [], "Missing SPORTRADAR_API_KEY");
+  const apiKey = env.SPORTRADAR_API_KEY;
+  if (!apiKey) return providerResponse("Sportradar Odds Player Props", "skipped", [], "Missing env.SPORTRADAR_API_KEY");
   const market = url.searchParams.get("market");
   const eventId = url.searchParams.get("eventId");
   const book = url.searchParams.get("book");
