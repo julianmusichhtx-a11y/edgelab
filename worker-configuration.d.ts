@@ -5,4 +5,14 @@ declare namespace Cloudflare {
 	interface Env {
 	}
 }
-interface Env extends Cloudflare.Env {}
+interface Env extends Cloudflare.Env {
+	GEMINI_API_KEY: string;
+	DEEPSEEK_API_KEY: string;
+	SHARP_API_KEY: string;
+	PARLAY_API_KEY: string;
+	THE_ODDS_API_KEY: string;
+	SPORTSDATAIO_MLB_API_KEY: string;
+	OPENWEATHER_API_KEY: string;
+	SPORTRADAR_API_KEY: string;
+	PREDICTION_API_ORIGIN: string;
+}
